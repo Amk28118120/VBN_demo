@@ -12,6 +12,7 @@ WIDTH, HEIGHT = None, None # if None on Pi, we'll pick a sensible default per se
 FPS           = 30
 EXPOSURE_MS   = 3.0        # ~2–10 ms works well for LEDs
 USE_PICAMERA2 = True       # set False to force OpenCV even on a Pi
+
 # =========================
 
 def _is_pi():
@@ -22,6 +23,7 @@ def _is_pi():
 
 class FrameSource:
     def __init__(self):
+        self.COUNTER= 0
         self.picam2 = None
         self.cap = None
         self._using_picam2 = False
@@ -105,11 +107,13 @@ class FrameSource:
 
     def read(self):
         if self._using_picam2:
+            print(self.COUNTER)
             arr = self.picam2.capture_array("main")  # RGB
             if arr is None or arr.size == 0:
                 return False, None
             return True, cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
         else:
+            self.COUNTER = self.COUNTER+1
             ok, frame = self.cap.read()
             return ok, frame
 

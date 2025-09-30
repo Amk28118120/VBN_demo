@@ -1,5 +1,5 @@
 # web_stream.py — ultra-light MJPEG server for headless preview
-import threading, time
+import threading, time, socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class _FrameStore:
@@ -64,7 +64,15 @@ class MJPEGServer:
         self.httpd.store = self.store
         self._t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self._t.start()
-        print(f"[stream] serving on http://{host}:{port}/  (/stream, /snapshot)")
+        # Get local IP for user-friendly message
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            local_ip = "YOUR_PI_IP"
+        print(f"[stream] serving on http://{local_ip}:{port}/  (/stream, /snapshot)")
     def update(self, jpg_bytes: bytes):
         self.store.update(jpg_bytes)
     def stop(self):

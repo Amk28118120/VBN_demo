@@ -29,6 +29,7 @@ def draw_pattern(img, center_uv, offset_uv, outer_uv):
       - center (blue), offset (red), outers (yellow),
       - line center→offset (red).
     """
+
     if center_uv is not None and np.all(np.isfinite(center_uv)):
         cv2.circle(img, _to_int_pair(center_uv), 4, (255, 0, 0), -1)  # blue
     if offset_uv is not None and np.all(np.isfinite(offset_uv)):
@@ -42,6 +43,7 @@ def draw_pattern(img, center_uv, offset_uv, outer_uv):
             if not np.all(np.isfinite(q)): 
                 continue
             cv2.circle(img, _to_int_pair(q), 7, (0, 255, 255), -1)     # yellow
+
     return img
 
 def draw_reprojections(img, reproj, z_cam=None, color=(0, 255, 0), thickness=2):
@@ -83,6 +85,12 @@ def draw_hud(img, lines, fps=None, origin=(10, 30), line_start_y=60, line_gap=22
     """
     Draw FPS and a list of HUD lines.
     """
+    h, w = img.shape[:2]
+    img_center = (w // 2, h // 2)
+    # --- Reference cross (green) ---
+    cv2.line(img, (img_center[0], 0), (img_center[0], h), (0, 255, 0), 1)  # vertical
+    cv2.line(img, (0, img_center[1]), (w, img_center[1]), (0, 255, 0), 1)  # horizontal
+
     if fps is not None:
         cv2.putText(img, f"FPS: {fps:.1f}", origin,
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)

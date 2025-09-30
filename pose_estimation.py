@@ -54,15 +54,21 @@ def identify_and_order(pts2d, distinct_ratio=0.70):
         assigned[lab] = pick
         used.add(pick)
 
+    # circle_ordered = np.vstack([
+    #     outer_pts[assigned["Down"]],
+    #     outer_pts[assigned["Right"]],
+    #     outer_pts[assigned["Up"]],
+    #     outer_pts[assigned["Left"]],
+    # ]).astype(np.float32)
     circle_ordered = np.vstack([
-        outer_pts[assigned["Right"]],
-        outer_pts[assigned["Up"]],
-        outer_pts[assigned["Left"]],
-        outer_pts[assigned["Down"]],
+        pts2d[0],
+        pts2d[1],
+        pts2d[2],
+        pts2d[3],
     ]).astype(np.float32)
 
-    ordered_pts2d = np.vstack([circle_ordered, offset_pt]).astype(np.float32)
-
+    ordered_pts2d = np.vstack([circle_ordered, pts2d[4]]).astype(np.float32)
+    print ("ordered points",ordered_pts2d)
     return {
         "ok": True,
         "center_uv": np.mean(circle_ordered, axis=0).astype(np.float32),  # 4-LED centre
@@ -147,9 +153,9 @@ def analytic_rpy_range_full(ordered_pts_px, K, R_phys):
     x_r[:,2] = pts[:,1] - vc  # z'
 
     y1, z1 = x_r[0,1], x_r[0,2]   # Right
-    y2, z2 = x_r[1,1], x_r[1,2]   # Up
+    y2, z2 = x_r[1,1], x_r[1,2]   # Down
     y3, z3 = x_r[2,1], x_r[2,2]   # Left
-    y4, z4 = x_r[3,1], x_r[3,2]   # Down
+    y4, z4 = x_r[3,1], x_r[3,2]   # Up
     y5, z5 = x_r[4,1], x_r[4,2]   # Offset (near centre)
 
     # Guard degeneracies
@@ -157,6 +163,7 @@ def analytic_rpy_range_full(ordered_pts_px, K, R_phys):
         raise FloatingPointError("Analytic ill-conditioned (denominator ~ 0).")
 
     # α
+    print ("z1,z2 - ",z1,z2)
     alpha = np.arctan2(-z1, z2)
     ca, sa = np.cos(alpha), np.sin(alpha)
 
@@ -169,7 +176,7 @@ def analytic_rpy_range_full(ordered_pts_px, K, R_phys):
     den_b = (np.sin(gamma_plus_Az) * sa + (y3 / z5))
     beta_plus_El = _safe_asin(num_b / den_b)
     beta = beta_plus_El - El
-
+    print("alpha,beta,gamma - ",np.degrees(alpha) , np.degrees(beta) , np.degrees(gamma))
     # Range
     Df = float(R_phys) * fx  # D * f_x (because y' is in pixels)
     range_R = (Df / y1) * (np.cos(alpha) * np.cos(gamma_plus_Az)
@@ -177,9 +184,9 @@ def analytic_rpy_range_full(ordered_pts_px, K, R_phys):
 
     # Object->camera rotation (1-2-3) then to aerospace for display
     R_cam = Rz(gamma) @ Ry(beta) @ Rx(alpha)
-    R_aero = M_cam_to_aero @ R_cam @ M_cam_to_aero.T
-    roll, pitch, yaw = euler321_from_R(R_aero)
-    rpy_deg = tuple(np.degrees([roll, pitch, yaw]))
+    # R_aero = M_cam_to_aero @ R_cam @ M_cam_to_aero.T
+    # roll, pitch, yaw = euler321_from_R(R_aero)
+    rpy_deg = tuple(np.degrees([alpha,beta,gamma]))
     AzEl_deg = (float(np.degrees(Az)), float(np.degrees(El)))
 
     return {"ok": True, "rpy321_deg": rpy_deg, "range_m": float(range_R), "AzEl_deg": AzEl_deg}
@@ -248,7 +255,7 @@ def pnp_rpy_range_centered(ordered_pts_px, K, distCoeffs, R_phys, d_phys=0.010):
 # ==============
 
 def estimate_pose(ordered_pts_px, K, distCoeffs, R_phys, d_phys=0.010):
-    """
+    """https://github.com/dangercomix07/VBN_DEMO.git
     Returns:
       {
         "analytic": {"ok": bool, "rpy321_deg": (φ,θ,ψ), "range_m": R, "AzEl_deg": (Az,El)},

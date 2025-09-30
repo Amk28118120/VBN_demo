@@ -6,6 +6,7 @@ import numpy as np
 
 from capture_frame import FrameSource
 from led_detection import detect_leds
+from led_detection_man import detect_leds_python
 from pose_estimation import identify_and_order, estimate_pose
 from display import draw_raw_points, draw_pattern, draw_reprojections, draw_hud
 from web_stream import MJPEGServer  # <-- tiny HTTP MJPEG server you copied
@@ -25,11 +26,11 @@ SNAP_EVERY_N = int(os.environ.get("SNAP_EVERY_N", "0"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "80"))
 
 # ---------- Pattern geometry (meters) ----------
-R = 0.020  # radius from center to each of the 4 outer LEDs
+R = 0.010  # radius from center to each of the 4 outer LEDs
 
 # ---------- Camera intrinsics & distortion ----------
-camMatrix = np.array([[2593,    0, 1614],
-                      [   0, 2588, 1213],
+camMatrix = np.array([[933.33,    0, 640],
+                      [   0, 933.33, 400],
                       [   0,    0,    1]], dtype=np.float64)
 
 distCoeff = np.array([ 2.18984921e-01, -5.80493965e-01, 1.15200278e-04,
@@ -65,7 +66,7 @@ def main():
             fps = frames / max(1e-6, (now - t0))
 
             # --- detect up to 5 bright blobs ---
-            pts = detect_leds(frame, max_pts=5)
+            pts = detect_leds_python(frame, max_pts=5)
             pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2) if pts is not None else np.empty((0,2), np.float32)
 
             vis = frame.copy()
