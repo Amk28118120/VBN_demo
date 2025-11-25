@@ -111,6 +111,19 @@ def main():
                             "Analytic:",
                             f"R{φa:6.1f}deg  P{θa:6.1f}deg  Y{ψa:6.1f}deg",
                             f"LOS: Az{az_a:6.1f}deg  El{el_a:6.1f}deg   R{Ra:6.3f} m",
+                            
+                        ]
+                        hud += [
+                            "Kalman State:",
+                             f"Pos:   x={kf.x[0,0]:.3f}  y={kf.x[1,0]:.3f}  z={kf.x[2,0]:.3f}",
+                             f"Vel:   vx={kf.x[3,0]:.3f} vy={kf.x[4,0]:.3f} vz={kf.x[5,0]:.3f}",
+                             f"RPY:   R={kf.x[6,0]:.2f}°  P={kf.x[7,0]:.2f}°  Y={kf.x[8,0]:.2f}°",
+                             f"Rates: wR={kf.x[9,0]:.2f} wP={kf.x[10,0]:.2f} wY={kf.x[11,0]:.2f}",
+                        ]
+                        hud += [
+                             "Measurement (6x1):",
+                             f"x={reading[0,0]:.3f}  y={reading[1,0]:.3f}  z={reading[2,0]:.3f}",
+                             f"α={reading[3,0]:.2f}°  β={reading[4,0]:.2f}°  γ={reading[5,0]:.2f}°",
                         ]
                     else:
                         hud += ["Analytic: unavailable"]
