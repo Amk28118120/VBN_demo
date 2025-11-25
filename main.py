@@ -29,9 +29,9 @@ JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "80"))
 R = 0.010  # radius from center to each of the 4 outer LEDs
 
 # ---------- Camera intrinsics & distortion ----------
-camMatrix = np.array([[933.33,    0, 640],
-                      [   0, 933.33, 400],
-                      [   0,    0,    1]], dtype=np.float64)
+camMatrix = np.array([[908.62425565  , 0, 643.93436085],
+                    [0, 908.92570486, 393.45889572],
+                    [0, 0, 1.0]], dtype=np.float64)
 
 distCoeff = np.array([ 2.18984921e-01, -5.80493965e-01, 1.15200278e-04,
                       -2.04177566e-03, 4.48611005e-01], dtype=np.float64)
@@ -52,10 +52,12 @@ def main():
 
     t0 = time.time(); frames = 0
     print(f"[run] HEADLESS={HEADLESS} STREAM={STREAM} (browse http://<pi-ip>:8080/ if streaming)")
-
+    priors = { "lock": False,"range" : 0, "centre" : [], "area_const" : 3236.41,"length_const" : 8600}
     try:
         while True:
-            ok, frame = cap.read()
+            ok, frame, frame_colour = cap.read()
+            #print(frame)
+            print(frame.shape,frame.dtype)
             if not ok or frame is None:
                 print("\n[capture] no frame from camera. Edit SOURCE in capture_frame.py or check camera.")
                 time.sleep(0.02)
@@ -66,24 +68,26 @@ def main():
             fps = frames / max(1e-6, (now - t0))
 
             # --- detect up to 5 bright blobs ---
-            pts = detect_leds_python(frame, max_pts=5)
+            pts = detect_leds_python(frame, priors,20,5,max_pts=5)
             pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2) if pts is not None else np.empty((0,2), np.float32)
 
-            vis = frame.copy()
+            vis = frame_colour.copy()
             draw_raw_points(vis, pts)  # cyan dots for all detections
 
             hud = []
             console_msg = ""
-
-            if len(pts) >= 5:
+            
+            if len(pts) == 5:
+                hud += ["Lock:",f"{priors['lock']}",]
                 res = identify_and_order(pts)
                 if res["ok"]:
                     C        = res["center_uv"]
                     off      = res["offset_uv"]
                     outs     = res["outer_uv"]
                     ordered  = res["ordered_pts2d"]
-
+                    priors["centre"] = res["center_uv"]
                     draw_pattern(vis, C, off, outs)
+                    priors["lock"] = True
 
                     # --- hybrid pose: analytic + PnP ---
                     try:
@@ -93,11 +97,14 @@ def main():
                                 "pnp":      {"ok": False, "reason": "exception"}}
 
                     # ---- Analytic: RPY + LOS + Range ----
+                    
                     az_a, el_a = _los_from_center(C, camMatrix)
                     ap = pose.get("analytic", {})
                     if ap.get("ok", False):
                         φa, θa, ψa = ap["rpy321_deg"]
                         Ra = ap["range_m"]
+                        priors["range"] = Ra * 1000
+                        
                         hud += [
                             "Analytic:",
                             f"R{φa:6.1f}deg  P{θa:6.1f}deg  Y{ψa:6.1f}deg",
@@ -135,8 +142,10 @@ def main():
                     hud += [res.get("reason", "pattern id failed")]
                     console_msg = res.get("reason", "pattern id failed")
             else:
+                hud += ["Lock:",f"{priors['lock']}",]
                 hud += [f"Need 5 LEDs (got {len(pts)})"]
                 console_msg = f"Need 5 LEDs (got {len(pts)})"
+                priors["lock"] = False
 
             draw_hud(vis, hud, fps=fps)
 

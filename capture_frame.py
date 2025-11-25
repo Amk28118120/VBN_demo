@@ -10,10 +10,24 @@ import time, platform, cv2, numpy as np
 SOURCE        = 0          # OpenCV device index or "rtsp://..." URL (ignored by Picamera2)
 WIDTH, HEIGHT = None, None # if None on Pi, we'll pick a sensible default per sensor
 FPS           = 30
-EXPOSURE_MS   = 3.0        # ~2–10 ms works well for LEDs
+EXPOSURE_MS   = 0.2        # ~2–10 ms works well for LEDs
 USE_PICAMERA2 = True       # set False to force OpenCV even on a Pi
 
 # =========================
+
+
+def decode_raw_shifted(raw_frame, shift_bits):
+    """
+    raw_frame: (H, W*2) uint8
+    shift_bits: how many bits original value was shifted left
+    """
+    # interpret as little-endian uint16
+    raw16 = raw_frame.view(np.uint16)
+
+    # shift back down
+    gray = (raw16 >> shift_bits).astype(np.uint8)
+
+    return gray
 
 def _is_pi():
     try:
@@ -46,7 +60,7 @@ class FrameSource:
 
                 cfg = self.picam2.create_video_configuration(
                     main={"size": size, "format": "RGB888"},
-                    raw=None
+                    raw={'size': size,'format': 'R8'}     # or 'R8' depending on mode
                 )
                 self.picam2.configure(cfg)
 
@@ -108,14 +122,16 @@ class FrameSource:
     def read(self):
         if self._using_picam2:
             print(self.COUNTER)
-            arr = self.picam2.capture_array("main")  # RGB
+            arr = self.picam2.capture_array("raw")  
+            colour_arr = self.picam2.capture_array("main") # RGB
+            arr = decode_raw_shifted(arr, 8)
             if arr is None or arr.size == 0:
                 return False, None
-            return True, cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            return True, arr, cv2.cvtColor(colour_arr, cv2.COLOR_RGB2BGR)
         else:
             self.COUNTER = self.COUNTER+1
             ok, frame = self.cap.read()
-            return ok, frame
+            return ok, frame, colour_arr
 
     def release(self):
         if self._using_picam2 and self.picam2:

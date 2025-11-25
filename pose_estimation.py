@@ -14,45 +14,45 @@ def identify_and_order(pts2d, distinct_ratio=0.70):
     if pts2d.shape[0] < 5:
         return {"ok": False, "reason": "need 5 points"}
 
-    # 1) inner vs outer by distance to centroid (of all 5)
-    C = np.mean(pts2d, axis=0)
-    dists = np.linalg.norm(pts2d - C, axis=1)
-    idx_sorted = np.argsort(dists)
-    idx_offset = int(idx_sorted[0])
-    idx_outer  = idx_sorted[1:5]
-    offset_pt  = pts2d[idx_offset]
-    outer_pts  = pts2d[idx_outer]
+    # # 1) inner vs outer by distance to centroid (of all 5)
+    # C = np.mean(pts2d, axis=0)
+    # dists = np.linalg.norm(pts2d - C, axis=1)
+    # idx_sorted = np.argsort(dists)
+    # idx_offset = int(idx_sorted[0])
+    # idx_outer  = idx_sorted[1:5]
+    offset_pt  = pts2d[4]
+    outer_pts  = pts2d[:4]
 
-    # distinctness check
-    offset_d = float(dists[idx_offset])
-    med_outer = float(np.median(dists[idx_outer]))
-    if med_outer <= 1e-6 or (offset_d / med_outer) > distinct_ratio:
-        return {"ok": False, "reason": "ambiguous inner/outer"}
+    # # distinctness check
+    # offset_d = float(dists[idx_offset])
+    # med_outer = float(np.median(dists[idx_outer]))
+    # if med_outer <= 1e-6 or (offset_d / med_outer) > distinct_ratio:
+    #     return {"ok": False, "reason": "ambiguous inner/outer"}
 
-    # 2) local axes from C->offset (Up) and its +90° CW (Right)
-    v_up = offset_pt - C
-    n = float(np.linalg.norm(v_up))
-    if n < 1e-6:
-        return {"ok": False, "reason": "degenerate up vector"}
-    e_up = v_up / n
-    e_right = np.array([e_up[1], -e_up[0]], dtype=np.float32)
+    # # 2) local axes from C->offset (Up) and its +90° CW (Right)
+    # v_up = offset_pt - C
+    # n = float(np.linalg.norm(v_up))
+    # if n < 1e-6:
+    #     return {"ok": False, "reason": "degenerate up vector"}
+    # e_up = v_up / n
+    # e_right = np.array([e_up[1], -e_up[0]], dtype=np.float32)
 
-    # 3) project outers and pick extrema for labels
-    rel = outer_pts - C
-    x = rel @ e_right
-    y = rel @ e_up
+    # # 3) project outers and pick extrema for labels
+    # rel = outer_pts - C
+    # x = rel @ e_right
+    # y = rel @ e_up
 
-    labels = ["Right","Up","Left","Down"]
-    metrics = {"Right": x, "Up": y, "Left": -x, "Down": -y}
-    assigned, used = {}, set()
-    for lab in labels:
-        vals = metrics[lab]
-        order = np.argsort(-vals)
-        pick = next((i for i in order if i not in used), None)
-        if pick is None:
-            return {"ok": False, "reason": "label assignment failed"}
-        assigned[lab] = pick
-        used.add(pick)
+    # labels = ["Right","Up","Left","Down"]
+    # metrics = {"Right": x, "Up": y, "Left": -x, "Down": -y}
+    # assigned, used = {}, set()
+    # for lab in labels:
+    #     vals = metrics[lab]
+    #     order = np.argsort(-vals)
+    #     pick = next((i for i in order if i not in used), None)
+    #     if pick is None:
+    #         return {"ok": False, "reason": "label assignment failed"}
+    #     assigned[lab] = pick
+    #     used.add(pick)
 
     # circle_ordered = np.vstack([
     #     outer_pts[assigned["Down"]],
@@ -102,14 +102,14 @@ def Rz(c):
 def euler321_from_R(R):
     """Aerospace Z-Y-X (yaw-pitch-roll) → (roll φ, pitch θ, yaw ψ) radians."""
     R = np.asarray(R, dtype=np.float64)
-    pitch = np.arcsin(-np.clip(R[2,0], -1.0, 1.0))
+    pitch = np.arcsin(-np.clip(-R[2,0], -1.0, 1.0))
     cp = np.cos(pitch)
     if abs(cp) < 1e-8:
         roll = 0.0
-        yaw  = np.arctan2(-R[0,1], R[1,1])
+        yaw  = np.arctan2(R[0,1], R[1,1])
     else:
-        roll = np.arctan2(R[2,1], R[2,2])
-        yaw  = np.arctan2(R[1,0], R[0,0])
+        roll = np.arctan2(-R[2,1], R[2,2])
+        yaw  = np.arctan2(-R[1,0], R[0,0])
     return roll, pitch, yaw
 
 # Camera (x right, y down, z forward) -> Aerospace (x forward, y right, z down)
@@ -152,10 +152,10 @@ def analytic_rpy_range_full(ordered_pts_px, K, R_phys):
     x_r[:,1] = pts[:,0] - uc  # y'
     x_r[:,2] = pts[:,1] - vc  # z'
 
-    y1, z1 = x_r[0,1], x_r[0,2]   # Right
-    y2, z2 = x_r[1,1], x_r[1,2]   # Down
-    y3, z3 = x_r[2,1], x_r[2,2]   # Left
-    y4, z4 = x_r[3,1], x_r[3,2]   # Up
+    y1, z1 = x_r[0,1], x_r[0,2]   # Up
+    y2, z2 = x_r[1,1], x_r[1,2]   # Left
+    y3, z3 = x_r[2,1], x_r[2,2]   # Down
+    y4, z4 = x_r[3,1], x_r[3,2]   # Right
     y5, z5 = x_r[4,1], x_r[4,2]   # Offset (near centre)
 
     # Guard degeneracies
@@ -207,7 +207,7 @@ def _model_points_centered(R_phys, d_phys):
         [  0.0, +R,  0.0], # Up
         [ -R,  0.0, 0.0],  # Left
         [  0.0, -R,  0.0], # Down
-        [  0.0,  d,  0.0], # Offset (near centre)
+        [  0.0,  0,  -d], # Offset (near centre)
     ], dtype=np.float64)
     # Centroid of the 4 outers is already (0,0,0), so model is centred as-is.
     return model
@@ -220,7 +220,7 @@ def pnp_rpy_range_centered(ordered_pts_px, K, distCoeffs, R_phys, d_phys=0.010):
     pts = np.asarray(ordered_pts_px, dtype=np.float64).reshape(5,2)
     model = _model_points_centered(R_phys, d_phys)
 
-    ok, rvec, tvec = cv2.solvePnP(model, pts, K, distCoeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+    ok, rvec, tvec = cv2.solvePnP(model, pts, K, distCoeffs, flags=cv2.SOLVEPNP_EPNP)
     if not ok:
         return {"ok": False, "reason": "solvePnP failed"}
 
