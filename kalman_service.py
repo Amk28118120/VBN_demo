@@ -353,28 +353,37 @@ def main_loop(prop_freq=PROP_HZ):
             display_rpy_deg = np.rad2deg(x[3:6].copy())
             print("[MEAS UPDATE] pos:", np.round(x[0:3],4), "rpy_deg:", np.round(display_rpy_deg,3))
 
-        # check if latest frame file changed; if so, load it
-        frame_img = None
+
+        # DO NOT reset frame_img every loop – remove "frame_img = None" entirely.
+        # Keep frame_img persistent from previous loop.
+        
         try:
             st = os.stat(FRAME_PATH)
             mtime = st.st_mtime
+        
+            # check if new frame is available
             if mtime != last_frame_mtime:
                 img = load_latest_frame()
+        
+                # only replace if valid
                 if img is not None:
-                    frame_img = img
+                    frame_img = img.copy()      # update to latest frame
+        
+                    # update camera FPS
                     cam_frame_count += 1
                     now = time.time()
                     if now - cam_frame_last >= 1.0:
                         cam_fps = cam_frame_count / (now - cam_frame_last)
                         cam_frame_last = now
                         cam_frame_count = 0
+        
                     last_frame_mtime = mtime
-                    # compute vbn FPS if measurement contains ts? we can approximate
-                    # store timestamp of last frame - not necessary here
+        
+                # if img is None → KEEP OLD frame_img (do nothing)
+        
         except FileNotFoundError:
-            frame_img = None
-        except Exception:
-            frame_img = None
+            pass  # FRAME_PATH doesn't exist yet → keep previous frame
+
 
         # Build HUD lines
         hud = []
@@ -412,4 +421,5 @@ if __name__ == "__main__":
         print("[kf_service] fatal:", e)
     finally:
         cleanup()
+
 
