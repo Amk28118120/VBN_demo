@@ -92,10 +92,12 @@ def main():
                     # --- hybrid pose: analytic + PnP ---
                     try:
                         pose = estimate_pose(ordered, camMatrix, distCoeff, R)
+                        
                     except Exception as e:
                         pose = {"analytic": {"ok": False, "reason": str(e)},
                                 "pnp":      {"ok": False, "reason": "exception"}}
-
+                    reading = convert_analytic_to_matrix(pose)
+                    kalman_readings = measurement_queue.put(reading)
                     # ---- Analytic: RPY + LOS + Range ----
                     
                     az_a, el_a = _los_from_center(C, camMatrix)
