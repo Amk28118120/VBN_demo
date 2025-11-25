@@ -3,7 +3,7 @@
 kalman_service.py
 KF daemon: receives measurements from VBN via /tmp/kf_socket (UNIX DGRAM).
 Reads latest camera JPEG frame from /tmp/vbn_last.jpg (written atomically by VBN).
-Overlays HUD (KF state / analytic / PnP) on top of latest frame and streams with MJPEGServer.
+Overlays HUD (KF state / measurement / diagnostics) on top of latest frame and streams with MJPEGServer.
 """
 
 import numpy as np
@@ -12,18 +12,8 @@ import socket, os, json, signal, sys
 import cv2
 from web_stream import MJPEGServer
 from display import draw_hud, draw_pattern, draw_reprojections, draw_raw_points
-# --- paste or import your EKF functions here (the ones you previously had) ---
-# We'll assume the propagate() and measurement_update() functions are defined
-# along with euler_to_R, R_to_euler, wrap, etc.
-# (Copy the EKF functions you already had into this file or import them.)
 
-# For brevity in this message I assume the EKF helper functions (propagate,
-# measurement_update, prop_velocity, prop_ang_velocity, etc.) are present
-# exactly as in your prior file; copy them into this module.
-
-
-
-# ------------------------- EKF FUNCTIONS (unchanged logic) -------------------------
+# ------------------------- EKF FUNCTIONS (from your code) -------------------------
 
 def euler_to_R(roll, pitch, yaw):
     R_x = np.array([[1, 0, 0],
@@ -81,11 +71,10 @@ def prop_state(x, dt):
     phi, th, psi = x[3:6]
     vx, vy, vz = x[6:9]
     wx, wy, wz = x[9:12]
-    B = B_matrix(phi, th)
-    omega = np.array([wx, wy, wz])
-    _ = B @ omega
+    # B is not used for integration here except to be compatible
+    _ = B_matrix(phi, th) @ np.array([wx, wy, wz])
     R = euler_to_R(phi, th, psi)
-    Rnew = rodrigues_update(R, omega, dt)
+    Rnew = rodrigues_update(R, np.array([wx, wy, wz]), dt)
     phi2, th2, psi2 = R_to_euler(Rnew)
     px2 = px + dt * vx
     py2 = py + dt * vy
@@ -158,25 +147,27 @@ def measurement_update(x_pred, P_pred, z, dt):
     x_post = prop_ang_velocity(x_post, x_pred, dt)
     return x_post, P_post
 
-# --- Configuration ---
+# ------------------------- Service configuration -------------------------
+
 SOCKET_PATH = "/tmp/kf_socket"
 FRAME_PATH = "/tmp/vbn_last.jpg"
-PROP_HZ = 200.0       # KF propagation frequency (Hz); tune as desired
+PROP_HZ = 200.0       # desired propagation frequency
 MJPEG_PORT = 8080
 
-# --- setup socket ---
+# If socket exists, remove (clean start)
 if os.path.exists(SOCKET_PATH):
     try: os.remove(SOCKET_PATH)
     except Exception: pass
 
+# Create UNIX domain datagram socket (server)
 srv = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 srv.bind(SOCKET_PATH)
 srv.setblocking(False)
 
-# MJPEG server (local stream)
+# MJPEG streaming server
 streamer = MJPEGServer(host="0.0.0.0", port=MJPEG_PORT)
 
-# cleanup on exit
+# Cleanup handler
 def cleanup(signum=None, frame=None):
     try:
         srv.close()
@@ -197,19 +188,7 @@ def cleanup(signum=None, frame=None):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# ---------- EKF globals (use your tuned values) ----------
-Q = np.eye(12) * 0.01
-Rcov = np.eye(6) * 0.1
-P_init = np.eye(12) * 0.1
-
-# === (You must copy your EKF helper functions here) ===
-# For brevity, paste the implementations of:
-# euler_to_R, R_to_euler, wrap, B_matrix, rodrigues_update,
-# prop_state, prop_velocity, prop_ang_velocity,
-# numerical_jacobian, propagate, measurement_update
-# (These are identical to what you already had and should be copied into this file.)
-# ------------------------------------------------------------------------------
-
+# --- utility: parse measurement JSON ---
 def parse_measurement_packet(data_bytes):
     try:
         j = json.loads(data_bytes.decode("utf-8"))
@@ -226,8 +205,8 @@ def parse_measurement_packet(data_bytes):
     arr[3:6] = np.deg2rad(arr[3:6])
     return arr
 
+# read latest JPEG-written frame (atomic write by VBN)
 def load_latest_frame():
-    """Return BGR image (uint8) or None if not present."""
     if not os.path.exists(FRAME_PATH):
         return None
     try:
@@ -236,23 +215,26 @@ def load_latest_frame():
     except Exception:
         return None
 
-def overlay_and_stream(frame_bgr, hud_lines, kf_state=None, other_draws=None):
-    """Draw HUD lines and any other overlays on a copy and stream via MJPEG server."""
+def overlay_and_stream(frame_bgr, hud_lines):
     img = frame_bgr.copy() if frame_bgr is not None else np.zeros((480,640,3), dtype=np.uint8)
-    # draw HUD using your draw_hud helper (lines are strings)
     draw_hud(img, hud_lines)
-    # any extra overlays done externally (e.g., reproject points), if provided
-    # encode to JPEG and update streamer
     ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
     if ok:
         streamer.update(jpg.tobytes())
 
+# -------------- main loop --------------
+
+# global holder for latest measurement (6,)
+latest_meas = None
+
 def main_loop(prop_freq=PROP_HZ):
+    global latest_meas
+
     dt_target = 1.0 / float(prop_freq)
     x = np.zeros(12)
     P = P_init.copy()
 
-    # init: wait for two measurements
+    # initialization: wait for two measurements (with timeout)
     first_z = None; second_z = None
     first_t = None; second_t = None
     meas_count = 0
@@ -261,19 +243,30 @@ def main_loop(prop_freq=PROP_HZ):
     last_meas_time = None
     prev_state = x.copy()
 
-    print("[kf_service] waiting for first two measurements...")
+    print("[kf_service] waiting for first two measurements (2s timeout)...")
+    init_start_time = time.time()
     while meas_count < 2:
         try:
             data, _ = srv.recvfrom(4096)
         except BlockingIOError:
-            time.sleep(0.01); continue
+            # timeout guard: if no initial measurements after 2s, start with zeros
+            if time.time() - init_start_time > 2.0:
+                print("[kf_service] No initial measurements — starting with zero state.")
+                x = np.zeros(12)
+                P = np.eye(12)
+                ekf_started = True
+                break
+            time.sleep(0.01)
+            continue
         except Exception as e:
             print("[kf_service] socket error during init:", e); time.sleep(0.1); continue
+
         tnow = time.time()
         try:
             z6 = parse_measurement_packet(data)
         except Exception as e:
             print("[kf_service] bad init packet:", e); continue
+
         meas_count += 1
         if meas_count == 1:
             first_z = z6.copy(); first_t = tnow
@@ -291,31 +284,40 @@ def main_loop(prop_freq=PROP_HZ):
             ekf_started = True
             last_prop_time = time.time()
             last_meas_time = second_t
+            latest_meas = second_z.copy()
             print("[kf_service] initialized state.")
 
     print("[kf_service] entering main loop")
     last_frame_mtime = 0.0
-    vbn_fps = 0.0
+
     # Frequency trackers
     kf_prop_count = 0
     kf_prop_last = time.time()
-    
+    kf_prop_freq = 0.0
+
     kf_meas_count = 0
     kf_meas_last = time.time()
-    
+    kf_meas_freq = 0.0
+
     cam_frame_count = 0
     cam_frame_last = time.time()
-    
-        
+    cam_fps = 0.0
+
+    # persistent frame image (keep last good)
+    frame_img = None
+
     while True:
         tloop = time.time()
         dt = tloop - last_prop_time
         last_prop_time = tloop
         if dt <= 0: dt = 1e-6
 
+        # propagate always (if started)
         if ekf_started:
             prev_state = x.copy()
             x, P = propagate(x, P, dt)
+
+            # propagation freq counter
             kf_prop_count += 1
             now = time.time()
             if now - kf_prop_last >= 1.0:
@@ -323,7 +325,7 @@ def main_loop(prop_freq=PROP_HZ):
                 kf_prop_last = now
                 kf_prop_count = 0
 
-        # check for measurement (non-blocking)
+        # non-blocking measurement receive
         z_new = None
         try:
             data, _ = srv.recvfrom(4096)
@@ -338,6 +340,10 @@ def main_loop(prop_freq=PROP_HZ):
             print("[kf_service] socket recv err:", e); z_new = None
 
         if z_new is not None:
+            # store latest measurement for HUD display
+            latest_meas = z_new.copy()
+
+            # measurement frequency counter
             kf_meas_count += 1
             now = time.time()
             if now - kf_meas_last >= 1.0:
@@ -345,70 +351,73 @@ def main_loop(prop_freq=PROP_HZ):
                 kf_meas_last = now
                 kf_meas_count = 0
 
+            # perform measurement update
             tmeas = time.time()
             dt_meas = tmeas - (last_meas_time if last_meas_time else tmeas)
             last_meas_time = tmeas
             x, P = measurement_update(x, P, z_new, dt_meas)
-            # convert back to degrees for display
+
+            # print a short update to console
             display_rpy_deg = np.rad2deg(x[3:6].copy())
             print("[MEAS UPDATE] pos:", np.round(x[0:3],4), "rpy_deg:", np.round(display_rpy_deg,3))
 
-
-        # DO NOT reset frame_img every loop – remove "frame_img = None" entirely.
-        # Keep frame_img persistent from previous loop.
-        
+        # FRAME UPDATE — only replace if a new valid frame is available
         try:
             st = os.stat(FRAME_PATH)
             mtime = st.st_mtime
-        
-            # check if new frame is available
             if mtime != last_frame_mtime:
                 img = load_latest_frame()
-        
-                # only replace if valid
                 if img is not None:
-                    frame_img = img.copy()      # update to latest frame
-        
-                    # update camera FPS
+                    frame_img = img.copy()
                     cam_frame_count += 1
                     now = time.time()
                     if now - cam_frame_last >= 1.0:
                         cam_fps = cam_frame_count / (now - cam_frame_last)
                         cam_frame_last = now
                         cam_frame_count = 0
-        
                     last_frame_mtime = mtime
-        
-                # if img is None → KEEP OLD frame_img (do nothing)
-        
+                # else: keep previous frame_img
         except FileNotFoundError:
-            pass  # FRAME_PATH doesn't exist yet → keep previous frame
+            # no frame yet; keep previous
+            pass
+        except Exception:
+            pass
 
+        # diagnostics: Frobenius norm of covariance
+        P_frob = np.linalg.norm(P, 'fro')
 
-        # Build HUD lines
+        # Build HUD
         hud = []
-        # KF state lines (display RPY in degrees)
         hud += [
             "KF State:",
             f"Pos: x={x[0]:.3f} y={x[1]:.3f} z={x[2]:.3f}",
             f"RPY: R={np.rad2deg(x[3]):.2f} P={np.rad2deg(x[4]):.2f} Y={np.rad2deg(x[5]):.2f}",
             f"Vel: vx={x[6]:.3f} vy={x[7]:.3f} vz={x[8]:.3f}",
         ]
-        # Add frequencies to HUD
+
+        # Latest measurement (display in degrees)
+        if latest_meas is not None:
+            hud += [
+                "Measurement:",
+                f"mx={latest_meas[0]:.3f}  my={latest_meas[1]:.3f}  mz={latest_meas[2]:.3f}",
+                f"mR={np.rad2deg(latest_meas[3]):.2f}°  mP={np.rad2deg(latest_meas[4]):.2f}°  mY={np.rad2deg(latest_meas[5]):.2f}°",
+            ]
+
+        # show covariance convergence metric
+        hud += [ f"‖P‖ (Fro): {P_frob:.3e}" ]
+
+        # Add frequencies
         hud += [
-            f"KF Prop Freq: {kf_prop_freq if 'kf_prop_freq' in locals() else 0:.1f} Hz",
-            f"Meas Freq: {kf_meas_freq if 'kf_meas_freq' in locals() else 0:.1f} Hz",
-            f"Camera FPS: {cam_fps if 'cam_fps' in locals() else 0:.1f} Hz",
+            f"KF Prop Freq: {kf_prop_freq:.1f} Hz",
+            f"Meas Freq: {kf_meas_freq:.1f} Hz",
+            f"Camera FPS: {cam_fps:.1f} Hz",
         ]
 
-        # analytic + PnP info: optional if you want to display last received analytic values
-        # You can extend hud with last analytic/pnp values if VBN sends them in JSON.
-
-        # Draw HUD onto chosen base image (frame_img if present else black canvas)
+        # Draw HUD onto last good frame (or a black canvas if none yet)
         base_img = frame_img if frame_img is not None else np.zeros((480,640,3), dtype=np.uint8)
         overlay_and_stream(base_img, hud)
 
-        # pace loop to prop_freq
+        # pace loop to requested propagation frequency
         elapsed = time.time() - tloop
         to_sleep = dt_target - elapsed
         if to_sleep > 0:
@@ -421,5 +430,3 @@ if __name__ == "__main__":
         print("[kf_service] fatal:", e)
     finally:
         cleanup()
-
-
