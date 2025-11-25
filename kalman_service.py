@@ -296,6 +296,17 @@ def main_loop(prop_freq=PROP_HZ):
     print("[kf_service] entering main loop")
     last_frame_mtime = 0.0
     vbn_fps = 0.0
+    # Frequency trackers
+    kf_prop_count = 0
+    kf_prop_last = time.time()
+    
+    kf_meas_count = 0
+    kf_meas_last = time.time()
+    
+    cam_frame_count = 0
+    cam_frame_last = time.time()
+    
+        
     while True:
         tloop = time.time()
         dt = tloop - last_prop_time
@@ -305,6 +316,12 @@ def main_loop(prop_freq=PROP_HZ):
         if ekf_started:
             prev_state = x.copy()
             x, P = propagate(x, P, dt)
+            kf_prop_count += 1
+            now = time.time()
+            if now - kf_prop_last >= 1.0:
+                kf_prop_freq = kf_prop_count / (now - kf_prop_last)
+                kf_prop_last = now
+                kf_prop_count = 0
 
         # check for measurement (non-blocking)
         z_new = None
@@ -321,6 +338,13 @@ def main_loop(prop_freq=PROP_HZ):
             print("[kf_service] socket recv err:", e); z_new = None
 
         if z_new is not None:
+            kf_meas_count += 1
+            now = time.time()
+            if now - kf_meas_last >= 1.0:
+                kf_meas_freq = kf_meas_count / (now - kf_meas_last)
+                kf_meas_last = now
+                kf_meas_count = 0
+
             tmeas = time.time()
             dt_meas = tmeas - (last_meas_time if last_meas_time else tmeas)
             last_meas_time = tmeas
@@ -338,6 +362,12 @@ def main_loop(prop_freq=PROP_HZ):
                 img = load_latest_frame()
                 if img is not None:
                     frame_img = img
+                    cam_frame_count += 1
+                    now = time.time()
+                    if now - cam_frame_last >= 1.0:
+                        cam_fps = cam_frame_count / (now - cam_frame_last)
+                        cam_frame_last = now
+                        cam_frame_count = 0
                     last_frame_mtime = mtime
                     # compute vbn FPS if measurement contains ts? we can approximate
                     # store timestamp of last frame - not necessary here
@@ -355,6 +385,13 @@ def main_loop(prop_freq=PROP_HZ):
             f"RPY: R={np.rad2deg(x[3]):.2f} P={np.rad2deg(x[4]):.2f} Y={np.rad2deg(x[5]):.2f}",
             f"Vel: vx={x[6]:.3f} vy={x[7]:.3f} vz={x[8]:.3f}",
         ]
+        # Add frequencies to HUD
+        hud += [
+            f"KF Prop Freq: {kf_prop_freq if 'kf_prop_freq' in locals() else 0:.1f} Hz",
+            f"Meas Freq: {kf_meas_freq if 'kf_meas_freq' in locals() else 0:.1f} Hz",
+            f"Camera FPS: {cam_fps if 'cam_fps' in locals() else 0:.1f} Hz",
+        ]
+
         # analytic + PnP info: optional if you want to display last received analytic values
         # You can extend hud with last analytic/pnp values if VBN sends them in JSON.
 
@@ -375,3 +412,4 @@ if __name__ == "__main__":
         print("[kf_service] fatal:", e)
     finally:
         cleanup()
+
